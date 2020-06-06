@@ -1,0 +1,19 @@
+{
+  "name": "iitk_bucks_main",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AthaSSiN/IITK_Bucks_Main.git"
+  },
+  "author": "Atharv Singh Patlan",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AthaSSiN/IITK_Bucks_Main/issues"
+  },
+  "homepage": "https://github.com/AthaSSiN/IITK_Bucks_Main#readme"
+}
