@@ -1,6 +1,9 @@
 {
   "name": "iitk_bucks_main",
   "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.17.1"
+  },
   "description": "",
   "main": "index.js",
   "scripts": {
