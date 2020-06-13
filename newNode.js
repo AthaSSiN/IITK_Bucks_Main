@@ -1,6 +1,9 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
+const Transaction = require("./classes/Transaction");
+const Output = require("./classes/Output");
+const Input = require("./classes/Input");
 
 const app = express();
 
