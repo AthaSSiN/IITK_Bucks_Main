@@ -57,9 +57,7 @@ function pushText(txt)
 }
 
 module.exports = function(txn, unusedOutputs)
-{
-    let usedOutputs = {};
-    
+{ 
     let inputs = txn.getInputs();
     let spent = 0, ini = 0;
 
@@ -84,11 +82,8 @@ module.exports = function(txn, unusedOutputs)
 
         if(verify === false)
             return false;
-
-        if(val in usedOutputs)
-            return false;
         
-        usedOutputs.set(val, prevOut);
+        unusedOutputs.delete(val);
         ini += prevOut.coins;
     }
 
