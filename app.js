@@ -8,8 +8,11 @@ const Output = require("./classes/Output");
 const Input = require("./classes/Input");
 const getRawBody = require('raw-body');
 const axios = require('axios')
+import {readInt, readTxn, verifyBlock} from './utils';
 
 const app = express();
+
+// Some settings to use
 
 app.use (bodyParser.urlencoded({extended : true}));
 app.use (bodyParser.json());
@@ -32,7 +35,8 @@ app.use((req, res, next) => {
         next();
 });
 
-// functions for various blockchain processes
+// Global Variables
+
 blocks = 0;
 
 const peerLim = 4;
@@ -42,68 +46,38 @@ let knownNodes = ["http://localhost:7000", "http://localhost:9000", "asd"];
 let pendingTxns = [];
 let unusedOutputs = new Map();
 
-function readInt(str, start, end)
-{
-    let size = end - start;
-    if(size === 4)
-    {
-        let ans = 0;
-        for(let i = 0; i < size; ++i)
-        {
-            ans = ans << 8;
-            ans += str[i + start];
-        }
-        return ans;
-    }
+/***** UTILITITY FUNCTIONS **** */
 
-    else
-    {
-        let ans = 0n;
-        for (let i = 0; i < size; ++i)
-        {
-            ans = ans * 256n;
-            ans += BigInt(str[i+start])
-        }
-        return ans;
-    }
-}
-
-function readTxn(str)
+function buildPendingTxns(temp)
 {
-    let start = 0;
     let txn = new Transaction;
-    txn.numInputs = readInt(str, start, start + 4);
-    start += 4;
-    for (let i = 0; i < txn.numInputs; ++i)
+    txn.numInputs = temp["inputs"].length;
+    for (let inp of temp["inputs"])
     {
         let input = new Input;
-        input.txnID = str.toString("hex", start, start + 32);
-        start += 32;
-        input.index = readInt(str, start, start + 4);
-        start += 4;
-        input.sigLength = readInt(str, start, start + 4);
-        start += 4;
-        input.sig = str.toString("hex", start, start + input.sigLength);
-        start += input.sigLength;
+        input.txnID = inp["transactionID"];
+        input.index = inp["index"];
+        input.sigLength = inp["signature"].length;
+        input.sig = inp["signature"];
+
         txn.pushInputs(input);
     }
 
-    txn.numOutputs = readInt(str, start, start + 4);
-    start += 4;
-    
-    for (let i = 0; i < txn.numOutputs; ++i)
+    txn.numOutputs = temp["outputs"].length;
+    for (let out of temp["outputs"])
     {
         let output = new Output;
-        output.coins = readInt(str, start, start + 8);
-        start += 8;
-        output.pubKeyLen = readInt(str, start, start + 4);
-        start += 4;
-        output.pubKey = str.toString("utf-8", start, start + output.pubKeyLen);
-        start += output.pubKeyLen;
+        output.coins = out["amount"];
+        output.pubKeyLen = out["recipient"].length;
+        output.pubKey = out["recipient"];
+
         txn.pushOutputs(output);
     }
-
-    return txn;
+    console.log(txn);
+    if(pendingTxns.indexOf(txn) === -1)
+        pendingTxns.push(txn);
+    else
+        console.log("Txn already in pending Txns");
 }
 
 function processBlock(block)
@@ -126,7 +100,7 @@ function processBlock(block)
         start += size;
         let ind = pendingTxns.indexOf(txn);
         if (ind > -1)
-            arr.splice(ind, 1);
+            pendingTxns.splice(ind, 1);
         let inputs = txn.getInputs();
         for (let input of inputs)
         {
@@ -145,6 +119,7 @@ function processBlock(block)
     }
 }
 
+// Function to process exisiting blockchain
 while(1)
 {
     try {
@@ -157,6 +132,7 @@ while(1)
     ++blocks;
 }
 
+// Helper functions to initialize node
 async function getNewBlock (url) {
     console.log(blocks);
     axios.get (url + "/getBlock/" + blocks, {
@@ -201,37 +177,6 @@ async function getNewPeers(url)
     });
 }
 
-function buildPendingTxns(temp)
-{
-    let txn = new Transaction;
-    txn.numInputs = temp["inputs"].length;
-    for (let inp of temp["inputs"])
-    {
-        let input = new Input;
-        input.txnID = inp["transactionID"];
-        input.index = inp["index"];
-        input.sigLength = inp["signature"].length;
-        input.sig = inp["signature"];
-
-        txn.pushInputs(input);
-    }
-
-    txn.numOutputs = temp["outputs"].length;
-    for (let out of temp["outputs"])
-    {
-        let output = new Output;
-        output.coins = out["amount"];
-        output.pubKeyLen = out["recipient"].length;
-        output.pubKey = out["recipient"];
-
-        txn.pushOutputs(output);
-    }
-    console.log(txn);
-    if(pendingTxns.indexOf(txn) === -1)
-        pendingTxns.push(txn);
-    else
-        console.log("Txn already in pending Txns");
-}
 
 function getPendingTxns(url)
 {
@@ -258,6 +203,7 @@ function getData()
         console.log("No Peers! :(")
 }
 
+// Function to initialize node
 function init() 
 {
     knownNodes.forEach((url) => {
@@ -341,11 +287,22 @@ app.get('/getPeers', (req,res) => {
 
 app.post('/newBlock', (req, res) => {
     let data = req.body;
-    console.log(blocks);
-    fs.writeFileSync(`Blocks/${blocks}.dat`,data);
-    ++blocks;
-    
-    res.send("Block Added");
+    console.log("Verifying block");
+    data = Buffer.from(data);
+    ret = verifyBlock(data, new Map(unusedOutputs));
+    if(ret === true)
+    {
+        console.log(`Block ${blocks} mined.`);
+        fs.writeFileSync(`Blocks/${blocks}.dat`,data);
+        processBlock(data);
+        ++blocks;
+        res.send("Block Added");
+    }
+    else
+    {
+        console.log("Invalid block");
+        res.send("Invalid block");
+    }
 });
 
 app.post('/newTransaction', (req, res) => {
