@@ -9,6 +9,9 @@ const Input = require("./classes/Input");
 const getRawBody = require('raw-body');
 const axios = require('axios')
 import {readInt, readTxn, verifyBlock} from './utils';
+const {Worker} = require('worker_threads');
+
+let worker = new Worker('./mine.js');
 
 const app = express();
 
@@ -45,6 +48,8 @@ let myPeers = [];
 let knownNodes = ["http://localhost:7000", "http://localhost:9000", "asd"];
 let pendingTxns = [];
 let unusedOutputs = new Map();
+let blockReward = 0;
+let myKey = "temporary string";
 
 /***** UTILITITY FUNCTIONS **** */
 
@@ -217,6 +222,40 @@ function init()
     }, 5000);
 }
 
+//Block mining functions:
+
+function mine()
+{
+    let size = 116;
+    let header = Buffer.alloc(116);
+    blockBody = ""
+    for(let i = 0; i < pendingTxns.length; ++i)
+    {
+        let tx = transactionBuffer(pendingTxns[i]);
+        size += tx.length
+        if(size > 1000116)
+            break;
+
+        if(verifyTxn(pendingTxns[i]) === true)
+            blockBody += tx;
+    }
+    let bHash = crypto.createHash('sha256').update(blockBody).digest('hex');
+    header.write(bHash, 36,32);
+    prevBlock = fs.readFileSync("Blocks/" + blocks + ".dat");
+    header.write(pHash !== crypto.createHash('sha256').update(prevBlock).digest('hex'),4,32);
+    header.write(pushInt(blocks, 4, false), 0, 4);
+    header.write("0000f" + '0'.repeat(59), 0,4, 'hex');
+
+    worker.postMessage({header : header});
+    worker.on('message', msg => {
+        processBlock(block);
+    })
+}
+
+function stopMining()
+{
+    worker.terminate();
+}
 // End points 
 
 app.get ('/getBlock/:num', (req, res) => {
