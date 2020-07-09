@@ -8,7 +8,7 @@ const Output = require("./classes/Output");
 const Input = require("./classes/Input");
 const getRawBody = require('raw-body');
 const axios = require('axios')
-import {readInt, readTxn, verifyBlock} from './utils';
+import {readInt, readTxn, verifyBlock, verifyTxn, transactionBuffer} from './utils';
 const {Worker} = require('worker_threads');
 
 let worker = new Worker('./mine.js');
@@ -50,6 +50,7 @@ let pendingTxns = [];
 let unusedOutputs = new Map();
 let blockReward = 0;
 let myKey = "temporary string";
+let target = "0000f" + '0'.repeat(59);
 
 /***** UTILITITY FUNCTIONS **** */
 
@@ -220,6 +221,8 @@ function init()
     setTimeout (() => {
         getData();    
     }, 5000);
+
+    mine();
 }
 
 //Block mining functions:
@@ -227,8 +230,9 @@ function init()
 function mine()
 {
     let size = 116;
+    let fees = 0;
     let header = Buffer.alloc(116);
-    blockBody = ""
+    let tempOutputs = new Map(unusedOutputs);
     for(let i = 0; i < pendingTxns.length; ++i)
     {
         let tx = transactionBuffer(pendingTxns[i]);
@@ -236,25 +240,84 @@ function mine()
         if(size > 1000116)
             break;
 
-        if(verifyTxn(pendingTxns[i]) === true)
-            blockBody += tx;
+        if(verifyTxn(pendingTxns[i], tempOutputs) === true)
+        {
+            let inputs = pendingTxns[i].getInputs();
+            for (let input of inputs)
+            {
+                let val = [input.txnID, input.index];
+                fees += tempOutputs[val].coins;
+                tempOutputs.delete(val);
+            }
+            let outputs = pendingTxns[i].getOutputs();
+            for(let output of outputs)
+            {
+                fees -= output.coins;
+            }
+            let tx = transactionBuffer(pendingTxns[i]);
+            size += tx.length;
+            if(size > 1000000)
+                break;
+            fs.appendFileSync("temp2.dat", tx);
+        }
     }
-    let bHash = crypto.createHash('sha256').update(blockBody).digest('hex');
-    header.write(bHash, 36,32);
-    prevBlock = fs.readFileSync("Blocks/" + blocks + ".dat");
-    header.write(pHash !== crypto.createHash('sha256').update(prevBlock).digest('hex'),4,32);
-    header.write(pushInt(blocks, 4, false), 0, 4);
-    header.write("0000f" + '0'.repeat(59), 0,4, 'hex');
+    let blockBod = fs.readFileSync('temp2.dat');
+    fs.unlinkSync('temp2.dat');
 
-    worker.postMessage({header : header});
+    let coinBaseTxn = new Transaction;
+    coinBaseTxn.numInputs = 0;
+    coinBaseTxn.numOutputs = 1;
+    
+    let coinBaseOut = new Output;
+    coinBaseOut.coins = fees + blockReward;
+    coinBaseOut.pubKeyLen = myKey.length;
+    coinBaseOut.pubKey = myKey;
+
+    coinBaseTxn.pushOutputs(coinBaseOut);
+    let cbt = transactionBuffer(coinBaseTxn);
+
+    fs.writeFileSync('temp2.dat', cbt);
+    fs.appendFileSync('temp2.dat', blockBod);
+    blockBod = fs.readFileSync('temp2.dat');
+    fs.unlinkSync('temp2.dat');
+
+    let bHash = crypto.createHash('sha256').update(blockBod).digest('hex');
+    prevBlock = fs.readFileSync("Blocks/" + blocks + ".dat");
+    header.write(pushInt(blocks, 4, false), 0, 4);
+    header.write(crypto.createHash('sha256').update(prevBlock).digest('hex'),4,32, 'hex');
+    header.write(bHash, 36,32, 'hex');
+    header.write(target, 68, 32, 'hex');
+
+    worker.postMessage({header : header, 
+                        target : target});
     worker.on('message', msg => {
+        fs.writeFileSync('temp.dat', msg.header);
+        
+        fs.appendFileSync('temp.dat', blockBod);
+        let block = fs.readFileSync('temp.dat');
+        fs.unlinkSync('temp.dat');
+        ++blocks;
         processBlock(block);
-    })
+        postNewBlock(block);
+        mine();
+    });
 }
 
-function stopMining()
+function postNewBlock(block)
 {
-    worker.terminate();
+    fs.writeFileSync(`Blocks/${blocks}.dat`,data);
+    console.log('Spreading the block');
+    for(let peer of myPeers)
+    {
+        axios.post(peer +'/newBlock', {
+            headers : {'Content-Type' : 'application/octet-stream'},
+            data : block
+        }).then(res => {
+            console.log('Block sent to '+ peer);
+        }).catch(err => {
+            console.log(err);
+        })
+    }
 }
 // End points 
 
@@ -331,10 +394,12 @@ app.post('/newBlock', (req, res) => {
     ret = verifyBlock(data, new Map(unusedOutputs));
     if(ret === true)
     {
+        worker.terminate().then(console.log('worker terminated :-('));
         console.log(`Block ${blocks} mined.`);
-        fs.writeFileSync(`Blocks/${blocks}.dat`,data);
-        processBlock(data);
         ++blocks;
+        processBlock(data);
+        mine();
+        postNewBlock(data);
         res.send("Block Added");
     }
     else

@@ -42,7 +42,7 @@ function pushInt(num, size = 4, file = true)
         }
     if (file === true)
     {
-        fs.appendFileSync("temp.dat", arr);
+        fs.appendFileSync("temp3.dat", arr);
         return;
     }
     else
@@ -54,7 +54,14 @@ function pushInt(num, size = 4, file = true)
 function pushText(txt)
 {
     let arr = new Uint8Array(Buffer.from(txt, 'utf-8'));
-    fs.appendFileSync("temp.dat", arr);
+    fs.appendFileSync("temp3.dat", arr);
+    return;
+}
+
+function pushHash(str)
+{
+    let arr = new Uint8Array(Buffer.from(str, 'hex'));
+    fs.appendFileSync("temp3.dat", arr);
     return;
 }
 
@@ -125,8 +132,9 @@ export function readTxn(str)
     return txn;
 }
 
-function verifyTxn(txn, unusedOutputs)
+export function verifyTxn(txn, realUnusedOutputs)
 { 
+    let unusedOutputs = new Map(realUnusedOutputs);
     let inputs = txn.getInputs();
     let spent = 0, ini = 0;
 
@@ -217,4 +225,35 @@ export function verifyBlock(block, unusedOutputs)
         return false;
     
     return true;
+}
+
+export function transactionBuffer(txn)
+{
+    let inputs = txn.getInputs();
+    let outputs = txn.getOutputs();
+    console.log(inputs);
+    console.log(outputs);
+
+    pushInt(txn.numInputs);
+    
+    for(let input of inputs)
+    {
+        pushHash(input.txnID);
+        pushInt(input.index);
+        pushInt(input.sigLength)
+        pushHash(input.sig);
+    }
+
+    pushInt(txn.numOutputs);
+
+    for(let output of outputs)
+    {
+        pushInt(output.coins, 8);
+        pushInt(output.pubKeyLen);
+        pushText(output.pubKey);
+    }
+
+    let tx = fs.readFileSync('temp3.dat');
+    fs.unlinkSync('temp3.dat');
+    return tx;
 }
