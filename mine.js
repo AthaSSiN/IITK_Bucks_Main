@@ -2,8 +2,32 @@ const { parentPort } = require('worker_threads');
 const now = require('nano-time');
 const crypto = require('crypto');
 const now = require('nano-time');
-import {pushInt} from './utils';
 
+function pushInt(num, size = 4, file = true)
+{
+    let arr = new Uint8Array(size);
+    if(size === 4)
+        for(let i = 0; i < size; ++i)
+        {
+            arr[size-i-1] = num%256;
+            num = num >> 8;
+        }
+    else
+        for(let i = 0; i < size; ++i)
+        {
+            arr[size-i-1] = parseInt(num%256n);
+            num = num/256n;
+        }
+    if (file === true)
+    {
+        fs.appendFileSync("temp3.dat", arr);
+        return;
+    }
+    else
+    {
+        return Buffer.from(arr).toString('hex');
+    }
+}
 
 parentPort.on('message', msg => {
     let mainBuf = msg.header;
