@@ -37,19 +37,25 @@ app.use((req, res, next) => {
         next();
 });
 
+//Vars from config file
+const env = JSON.parse(fs.readFileSync('./config.json'));
+
+const me = env["me"];
+let knownNodes = env["knownNodes"];
+let blockReward = env["blockReward"];
+let myKey = env["myKey"];
+let target = env["target"];
+
 // Global Variables
 
 blocks = 0;
 
 const peerLim = 4;
-const me = "http://localhost:8000";
 let myPeers = [];
-let knownNodes = ["http://localhost:7000", "http://localhost:9000", "asd"];
 let pendingTxns = [];
 let unusedOutputs = new Map();
-let blockReward = 0;
-let myKey = "temporary string";
-let target = "0000f" + '0'.repeat(59);
+let keys = new Map();
+let userOutputs = new Map();
 
 /******* BASIC UTILS *********/
 
@@ -387,6 +393,11 @@ function processBlock(block)
         for (let input of inputs)
         {
             let val = [input.txnID, input.index];
+            let obj = {};
+            obj["transactionID"] = input.txnID;
+            obj["index"] = input.index;
+            obj["amount"] = unusedOutputs[val].coins;
+            userOutputs[unusedOutputs[val].pubKey].splice(userOutputs[unusedOutputs[val].pubKey].indexOf(obj), 1);
             unusedOutputs.delete(val);
         }
         let outputs = txn.getOutputs();
@@ -397,6 +408,17 @@ function processBlock(block)
         {
             let val = [txnID, i];
             unusedOutputs.set(val, outputs[i]);
+            let obj = {};
+            obj["transactionID"] = txnID;
+            obj["index"] = i;
+            obj["amount"] = outputs[i].coins;
+            if (outputs[i].pubKey in userOutputs)
+                userOutputs[outputs[i].pubKey].push(obj);
+            else
+            {
+                userOutputs[outputs[i].pubKey] = [];
+                userOutputs[outputs[i].pubKey].push(obj);
+            }
         }
     }
 }
@@ -647,6 +669,80 @@ app.get ('/getPendingTransactions', (req, res) => {
     res.set('Content-Type', 'application/json');
     res.send(ret);
 });
+
+app.post('/addAlias', (req, res) => {
+    let alias = req.body.alias;
+    let pubKey = req.body.publicKey;
+    if (alias in keys) 
+        res.status(400).send("alias already exists");
+    
+    else 
+    {
+        for(let peer of myPeers)
+        {
+            axios.post(peer + '/addAlias', {
+                alias : alias,
+                publicKey : pubKey
+            })
+            .then(res => {
+                console.log("Alias: ", alias, "sent to url: ", url);
+            })
+            .catch(err => {
+                console.log(err);
+            })
+        }
+        
+        keys[alias] = pubKey;
+        console.log(keys[alias]);
+        res.status(200).send("Added");
+    }
+});
+
+app.get('/getPublicKey', (req, res) => {
+    let alias = req.body.alias;
+    if (alias in keys) 
+    {
+        let pubKey = keys[alias];
+        res.set('Content-type', 'application/json');
+        res.send({publicKey : pubKey});
+    }
+    else 
+        res.status(404).send("Alias not found");
+})
+
+app.get('/getUnusedOutputs', function(req, res) {
+    let pubKey = req.body.publicKey;
+    let alias = req.body.alias;
+
+    if (pubKey !== undefined) 
+    {
+        if (pubKey in userOutputs) 
+        {
+            let obj = {};
+            obj["unusedOutputs"] = userOutputs[pubKey];
+            res.set('Content-type', 'application/json');
+            res.send(obj);
+        }
+    }
+
+    else if (alias !== undefined) 
+    {
+        if (alias in keys) 
+        {
+            pubKey = keys[alias];
+            let obj = {};
+            if (pubKey in userOutputs)
+            {
+                obj["unusedOuptuts"] = userOutputs[pubKey];
+                res.set('Content-type', 'application/json');
+                res.send(obj);
+            }
+        }
+    }
+
+    res.status(404).send("Public Key not found");
+}) 
+
 
 app.post('/newPeer', (req, res) => {
 
