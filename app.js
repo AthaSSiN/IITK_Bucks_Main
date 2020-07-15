@@ -9,7 +9,7 @@ const Input = require("./classes/Input");
 const getRawBody = require('raw-body');
 const axios = require('axios');
 const {Worker} = require('worker_threads');
-
+const {cloneDeep} = require('lodash');
 let worker = new Worker('./mine.js');
 
 const app = express();
@@ -43,7 +43,7 @@ const env = JSON.parse(fs.readFileSync('./config.json'));
 const me = env["me"];
 let knownNodes = env["knownNodes"];
 let blockReward = env["blockReward"];
-let myKey = env["myKey"];
+let myKey = fs.readFileSync('./public.pem');
 let target = env["target"];
 
 // Global Variables
@@ -51,7 +51,7 @@ let target = env["target"];
 blocks = 0;
 
 const peerLim = 4;
-let myPeers = [];
+let myPeers = ["https://iitkbucks.pclub.in"];
 let pendingTxns = [];
 let unusedOutputs = new Map();
 let keys = new Map();
@@ -62,7 +62,7 @@ let userOutputs = new Map();
 function getOutputsHash(txn)
 {
     pushInt(txn.numOutputs);
-
+    outputs = txn.getOutputs();
     for(let output of outputs)
     {
         pushInt(output.coins, 8);
@@ -95,7 +95,7 @@ function pushInt(num, size = 4, file = true)
         }
     if (file === true)
     {
-        fs.appendFileSync("temp3.dat", arr);
+        fs.appendFileSync("temp.dat", arr);
         return;
     }
     else
@@ -107,14 +107,14 @@ function pushInt(num, size = 4, file = true)
 function pushText(txt)
 {
     let arr = new Uint8Array(Buffer.from(txt, 'utf-8'));
-    fs.appendFileSync("temp3.dat", arr);
+    fs.appendFileSync("temp.dat", arr);
     return;
 }
 
 function pushHash(str)
 {
     let arr = new Uint8Array(Buffer.from(str, 'hex'));
-    fs.appendFileSync("temp3.dat", arr);
+    fs.appendFileSync("temp.dat", arr);
     return;
 }
 
@@ -156,7 +156,7 @@ function readTxn(str)
     for (let i = 0; i < txn.numInputs; ++i)
     {
         let input = new Input;
-        input.txnID = str.toString("hex", start, start + 32);
+        input.txnId = str.toString("hex", start, start + 32);
         start += 32;
         input.index = readInt(str, start, start + 4);
         start += 4;
@@ -187,33 +187,38 @@ function readTxn(str)
 
 function verifyTxn(txn, realUnusedOutputs)
 { 
-    let unusedOutputs = new Map(realUnusedOutputs);
+    let tempOutputs = cloneDeep(realUnusedOutputs);
+    
     let inputs = txn.getInputs();
-    let spent = 0, ini = 0;
+    let spent = 0n, ini = 0n;
 
     let mainBuf = Buffer.alloc(68);
     mainBuf.write(getOutputsHash(txn), 36, 32, 'hex');
-
     for (let input of inputs)
     {
         let prevOut;
-        let val = [input.txnID, input.index];
-        if(val in unusedOutputs)
+        let val = [input.txnId, input.index];
+        if(val in tempOutputs)
         {
-            prevOut = unusedOutputs[val];
+            prevOut = tempOutputs[val];
         }
         else
+        {
+            console.log("Provided input not in unused outputs");
             return false;
+        }
         
-        mainBuf.write(input.txnID, 0, 32, 'hex');
+        mainBuf.write(input.txnId, 0, 32, 'hex');
         mainBuf.write(pushInt(input.index,4,false), 32, 4, 'hex');
         
-        const verify = crypto.createVerify('SHA256').update(mainBuf).verify({key:prevOut.pubKey, padding:crypto.constants.RSA_PKCS1_PSS_PADDING}, Buffer.from(input.sig, 'hex'));
-
+        const verify = crypto.createVerify('SHA256').update(mainBuf).verify({key:prevOut.pubKey, padding:crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength:32}, Buffer.from(input.sig, 'hex'));
         if(verify === false)
+        {
+            console.log("Incorrect signature");
             return false;
-        
-        unusedOutputs.delete(val);
+        }
+
+        tempOutputs.delete(val);
         ini += prevOut.coins;
     }
 
@@ -221,17 +226,21 @@ function verifyTxn(txn, realUnusedOutputs)
     for (let output of outputs)
     {
         if(output.coins < 0)
+        {
+            console.log("no");
             return false;
+        }
         spent += output.coins;
     }
 
-    return spent >= ini;
+    return spent < ini;
 
 }
 
 function verifyBlock(block, unusedOutputs)
 {
     let index = readInt(block, 0, 4);
+    console.log(index);
     if(index !== 0)
     {
         let start = 116;
@@ -245,19 +254,22 @@ function verifyBlock(block, unusedOutputs)
             start += 4;
             
             let tx = block.subarray(start, start + size);
-            
-            let txn = readTxn(tx);
-
+            start+=size;
+            let txn = readTxn(tx)
             if(i === 0)
                 cbt = txn;
-            else if(verifyTxn(txn, unusedOutputs) === false)
+            
+            else if( verifyTxn(txn, unusedOutputs) === false)
+            {
+                console.log("wrong txn");
                 return false;
+            }
             else
             {
                 let inputs = txn.getInputs();
                 for (let input of inputs)
                 {
-                    let val = [input.txnID, input.index];
+                    let val = [input.txnId, input.index];
                     fees += tempOutputs[val].coins;
                     tempOutputs.delete(val);
                 }
@@ -279,9 +291,6 @@ function verifyBlock(block, unusedOutputs)
     let targ = block.toString('hex', 68, 100);
 
     if(bHash !== crypto.createHash('sha256').update(block.subarray(116)).digest('hex'))
-        return false;
-    
-    if(targ !== '0'.repeat(7) + 'f' + '0'.repeat(56))
         return false;
     
     if(index !== 0)
@@ -313,7 +322,7 @@ function transactionBuffer(txn)
     
     for(let input of inputs)
     {
-        pushHash(input.txnID);
+        pushHash(input.txnId);
         pushInt(input.index);
         pushInt(input.sigLength)
         pushHash(input.sig);
@@ -328,8 +337,8 @@ function transactionBuffer(txn)
         pushText(output.pubKey);
     }
 
-    let tx = fs.readFileSync('temp3.dat');
-    fs.unlinkSync('temp3.dat');
+    let tx = fs.readFileSync('temp.dat');
+    fs.unlinkSync('temp.dat');
     return tx;
 }
 
@@ -343,9 +352,9 @@ function buildPendingTxns(temp)
     for (let inp of temp["inputs"])
     {
         let input = new Input;
-        input.txnID = inp["transactionID"];
+        input.txnId = inp["transactionId"];
         input.index = inp["index"];
-        input.sigLength = inp["signature"].length;
+        input.sigLength = inp["signature"].length/2;
         input.sig = inp["signature"];
 
         txn.pushInputs(input);
@@ -355,7 +364,7 @@ function buildPendingTxns(temp)
     for (let out of temp["outputs"])
     {
         let output = new Output;
-        output.coins = out["amount"];
+        output.coins = BigInt(out["amount"]);
         output.pubKeyLen = out["recipient"].length;
         output.pubKey = out["recipient"];
 
@@ -370,20 +379,17 @@ function buildPendingTxns(temp)
 
 function processBlock(block)
 {
-    let start = 0;
+    let start = 116;
     let numTxns =  readInt(block, start, start + 4);
     start += 4;
-
     for(let i = 0; i < numTxns; ++i)
     {
         let size = readInt(block, start, start + 4);
         start += 4;
-        
         let tx = block.subarray(start, start + size);
         
         let txn = readTxn(tx);
-
-        let txnID = crypto.createHash('sha256').update(tx).digest('hex');
+        let txnId = crypto.createHash('sha256').update(tx).digest('hex');
 
         start += size;
         let ind = pendingTxns.indexOf(txn);
@@ -392,11 +398,11 @@ function processBlock(block)
         let inputs = txn.getInputs();
         for (let input of inputs)
         {
-            let val = [input.txnID, input.index];
+            let val = [input.txnId, input.index];
             let obj = {};
-            obj["transactionID"] = input.txnID;
+            obj["transactionId"] = input.txnId;
             obj["index"] = input.index;
-            obj["amount"] = unusedOutputs[val].coins;
+            obj["amount"] = unusedOutputs[val].coins.toString();
             userOutputs[unusedOutputs[val].pubKey].splice(userOutputs[unusedOutputs[val].pubKey].indexOf(obj), 1);
             unusedOutputs.delete(val);
         }
@@ -406,12 +412,12 @@ function processBlock(block)
 
         for(let i = 0; i < numOutputs; ++i)
         {
-            let val = [txnID, i];
-            unusedOutputs.set(val, outputs[i]);
+            let val = [txnId, i];
+            unusedOutputs[val] = outputs[i];
             let obj = {};
-            obj["transactionID"] = txnID;
+            obj["transactionId"] = txnId;
             obj["index"] = i;
-            obj["amount"] = outputs[i].coins;
+            obj["amount"] = outputs[i].coins.toString();
             if (outputs[i].pubKey in userOutputs)
                 userOutputs[outputs[i].pubKey].push(obj);
             else
@@ -428,9 +434,11 @@ while(1)
 {
     try {
         block = fs.readFileSync(`Blocks/${blocks}.dat`);
+        ret = verifyBlock(block, cloneDeep(unusedOutputs));
+        console.log(ret);
         processBlock(block);
     } catch (err) {
-        console.log(blocks);
+        console.log(err);
         break;
     }
     ++blocks;
@@ -438,27 +446,20 @@ while(1)
 
 // Helper functions to initialize node
 async function getNewBlock (url) {
-    console.log(blocks);
-    axios.get (url + "/getBlock/" + blocks, {
-            headers: {
-                "Content-Type": "application/octet-stream"
-            }
+    await axios.get (url + "/getBlock/" + blocks, {
+            responseType: 'arraybuffer'
         }).then (res => {
             let block = res.data;
             block = Buffer.from(block)
             fs.writeFileSync(`Blocks/${blocks}.dat`,block);
             processBlock(block);
-            ++blocks;
-            getNewBlock(url);
-        }).catch (err => {
-            console.log("Got all blocks!");
         });
 }
 
 async function getNewPeers(url)
 {
-    axios.post(url + "/newPeer", {
-    "url" : me
+    axios.post(url + '/newPeer', {
+    url : me
     }).then( res => {
         if(res.status === 200)
         {
@@ -493,14 +494,26 @@ function getPendingTxns(url)
     })
 }
 
-function getData()
+async function getData()
 {
     if(myPeers.length !== 0)
     {
         console.log("Total peers: " + myPeers.length);
         console.log(myPeers);
         peer = myPeers[0];
-        getNewBlock(peer);
+        while(1)
+        {
+            try{
+                await getNewBlock(peer);
+                ++blocks;
+                console.log(blocks);
+            }
+            catch(err)
+            {
+                console.log("recd All blocks");
+                break;
+            }
+        }
         getPendingTxns(peer);
     }
     else
@@ -508,7 +521,7 @@ function getData()
 }
 
 // Function to initialize node
-function init() 
+async function init() 
 {
     knownNodes.forEach((url) => {
         console.log(url);
@@ -516,17 +529,13 @@ function init()
             getNewPeers(url);
     });
 
-    setTimeout (() => {
-        getData();    
-    }, 5000);
+    await getData();
 
-    i = 0;
-    while(pendingTxns.length === 0)
-        i++;
-
-    setTimeout(() => {}, 5000);
-
-    mine();
+    setTimeout(() => {
+        console.log(pendingTxns.length);
+        if(pendingTxns.length > 0)
+            mine();
+    }, 10000)
 }
 
 //Block mining functions:
@@ -549,7 +558,7 @@ function mine()
             let inputs = pendingTxns[i].getInputs();
             for (let input of inputs)
             {
-                let val = [input.txnID, input.index];
+                let val = [input.txnId, input.index];
                 fees += tempOutputs[val].coins;
                 tempOutputs.delete(val);
             }
@@ -595,11 +604,11 @@ function mine()
     worker.postMessage({header : header, 
                         target : target});
     worker.on('message', msg => {
-        fs.writeFileSync('temp.dat', msg.header);
+        fs.writeFileSync('temp3.dat', msg.header);
         
-        fs.appendFileSync('temp.dat', blockBod);
-        let block = fs.readFileSync('temp.dat');
-        fs.unlinkSync('temp.dat');
+        fs.appendFileSync('temp3.dat', blockBod);
+        let block = fs.readFileSync('temp3.dat');
+        fs.unlinkSync('temp3.dat');
         ++blocks;
         processBlock(block);
         postNewBlock(block);
@@ -644,7 +653,7 @@ app.get ('/getPendingTransactions', (req, res) => {
         for(let input of inputs)
         {
             let vals = {};
-            vals["transactionID"] = input.txnID;
+            vals["transactionId"] = input.txnId;
             vals["index"] = input.index;
             vals["signature"] = input.sig;
 
@@ -685,7 +694,7 @@ app.post('/addAlias', (req, res) => {
                 publicKey : pubKey
             })
             .then(res => {
-                console.log("Alias: ", alias, "sent to url: ", url);
+                console.log("Alias: ", alias, "sent to url: ", peer);
             })
             .catch(err => {
                 console.log(err);
@@ -698,7 +707,7 @@ app.post('/addAlias', (req, res) => {
     }
 });
 
-app.get('/getPublicKey', (req, res) => {
+app.post('/getPublicKey', (req, res) => {
     let alias = req.body.alias;
     if (alias in keys) 
     {
@@ -710,7 +719,7 @@ app.get('/getPublicKey', (req, res) => {
         res.status(404).send("Alias not found");
 })
 
-app.get('/getUnusedOutputs', function(req, res) {
+app.post('/getUnusedOutputs', function(req, res) {
     let pubKey = req.body.publicKey;
     let alias = req.body.alias;
 
@@ -720,9 +729,12 @@ app.get('/getUnusedOutputs', function(req, res) {
         {
             let obj = {};
             obj["unusedOutputs"] = userOutputs[pubKey];
+            console.log(obj);
             res.set('Content-type', 'application/json');
             res.send(obj);
         }
+        else
+            res.status(404).send("Public Key has no unused outputs");
     }
 
     else if (alias !== undefined) 
@@ -733,14 +745,16 @@ app.get('/getUnusedOutputs', function(req, res) {
             let obj = {};
             if (pubKey in userOutputs)
             {
-                obj["unusedOuptuts"] = userOutputs[pubKey];
+                obj["unusedOutputs"] = userOutputs[pubKey];
                 res.set('Content-type', 'application/json');
                 res.send(obj);
             }
+            else
+                res.status(404).send("Public Key has no unused outputs");
         }
     }
-
-    res.status(404).send("Public Key not found");
+    else
+        res.status(404).send("Public Key not found");
 }) 
 
 
@@ -769,7 +783,7 @@ app.post('/newBlock', (req, res) => {
     let data = req.body;
     console.log("Verifying block");
     data = Buffer.from(data);
-    ret = verifyBlock(data, new Map(unusedOutputs));
+    ret = verifyBlock(data, cloneDeep(unusedOutputs));
     if(ret === true)
     {
         worker.terminate().then(console.log('worker terminated :-('));
@@ -790,6 +804,7 @@ app.post('/newBlock', (req, res) => {
 app.post('/newTransaction', (req, res) => {
     let temp = req.body;
     buildPendingTxns(temp);
+    mine();
     res.send("Added to pending Txns");
 });
 

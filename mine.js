@@ -1,7 +1,6 @@
 const { parentPort } = require('worker_threads');
 const now = require('nano-time');
 const crypto = require('crypto');
-const now = require('nano-time');
 
 function pushInt(num, size = 4, file = true)
 {

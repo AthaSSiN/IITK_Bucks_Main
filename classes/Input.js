@@ -1,17 +1,17 @@
 class Input{
-    _txnID;
+    _txnId;
     _index;
     _sigLength;
     _sig;
 
-    set txnID(txnID)
+    set txnId(txnId)
     {
-        this._txnID = txnID;
+        this._txnId = txnId;
     }
 
-    get txnID ()
+    get txnId ()
     {
-        return this._txnID;
+        return this._txnId;
     }
 
     set index(index)
