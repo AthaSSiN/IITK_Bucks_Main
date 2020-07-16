@@ -42,16 +42,16 @@ const env = JSON.parse(fs.readFileSync('./config.json'));
 
 const me = env["me"];
 let knownNodes = env["knownNodes"];
-let blockReward = env["blockReward"];
+let blockReward = BigInt(env["blockReward"]);
 let myKey = fs.readFileSync('./public.pem');
 let target = env["target"];
 
 // Global Variables
 
-blocks = 0;
+let blocks = 0;
 
 const peerLim = 4;
-let myPeers = ["https://iitkbucks.pclub.in"];
+let myPeers = [];
 let pendingTxns = [];
 let unusedOutputs = new Map();
 let keys = new Map();
@@ -88,11 +88,14 @@ function pushInt(num, size = 4, file = true)
             num = num >> 8;
         }
     else
+    {
+        num = BigInt(num);
         for(let i = 0; i < size; ++i)
         {
             arr[size-i-1] = parseInt(num%256n);
             num = num/256n;
         }
+    }
     if (file === true)
     {
         fs.appendFileSync("temp.dat", arr);
@@ -188,7 +191,7 @@ function readTxn(str)
 function verifyTxn(txn, realUnusedOutputs)
 { 
     let tempOutputs = cloneDeep(realUnusedOutputs);
-    
+    console.log(tempOutputs);
     let inputs = txn.getInputs();
     let spent = 0n, ini = 0n;
 
@@ -219,6 +222,7 @@ function verifyTxn(txn, realUnusedOutputs)
         }
 
         tempOutputs.delete(val);
+        console.log("ins");
         ini += prevOut.coins;
     }
 
@@ -247,7 +251,7 @@ function verifyBlock(block, unusedOutputs)
         let numTxns = readInt(block, start, start+4);
         start += 4;
         let cbt;
-        let fees = 0;
+        let fees = 0n;
         for(let i = 0; i < numTxns; ++i)
         {
             let size = readInt(block, start, start + 4);
@@ -270,8 +274,8 @@ function verifyBlock(block, unusedOutputs)
                 for (let input of inputs)
                 {
                     let val = [input.txnId, input.index];
-                    fees += tempOutputs[val].coins;
-                    tempOutputs.delete(val);
+                    fees += unusedOutputs[val].coins;
+                    unusedOutputs.delete(val);
                 }
                 let outputs = txn.getOutputs();
                 for(let output of outputs)
@@ -280,7 +284,7 @@ function verifyBlock(block, unusedOutputs)
                 }
             }
         }
-        cbtOutputs = cbt.getOutputs();
+        let cbtOutputs = cbt.getOutputs();
         if (cbtOutputs.coins > fees + blockReward)
             return false;
     }
@@ -295,7 +299,7 @@ function verifyBlock(block, unusedOutputs)
     
     if(index !== 0)
     {
-        prevBlock = fs.readFileSync("Blocks/" + index - 1 + ".dat");
+        prevBlock = fs.readFileSync("Blocks/" + (index - 1).toString() + ".dat");
         if(pHash !== crypto.createHash('sha256').update(prevBlock).digest('hex'))
             return false;
     }
@@ -315,8 +319,6 @@ function transactionBuffer(txn)
 {
     let inputs = txn.getInputs();
     let outputs = txn.getOutputs();
-    console.log(inputs);
-    console.log(outputs);
 
     pushInt(txn.numInputs);
     
@@ -387,10 +389,8 @@ function processBlock(block)
         let size = readInt(block, start, start + 4);
         start += 4;
         let tx = block.subarray(start, start + size);
-        
         let txn = readTxn(tx);
         let txnId = crypto.createHash('sha256').update(tx).digest('hex');
-
         start += size;
         let ind = pendingTxns.indexOf(txn);
         if (ind > -1)
@@ -407,7 +407,6 @@ function processBlock(block)
             unusedOutputs.delete(val);
         }
         let outputs = txn.getOutputs();
-
         let numOutputs = txn.numOutputs;
 
         for(let i = 0; i < numOutputs; ++i)
@@ -426,6 +425,8 @@ function processBlock(block)
                 userOutputs[outputs[i].pubKey].push(obj);
             }
         }
+        console.log(unusedOutputs);
+        console.log(pendingTxns);
     }
 }
 
@@ -435,10 +436,13 @@ while(1)
     try {
         block = fs.readFileSync(`Blocks/${blocks}.dat`);
         ret = verifyBlock(block, cloneDeep(unusedOutputs));
-        console.log(ret);
-        processBlock(block);
+        if (ret === true)
+            processBlock(block);
+        else
+            throw new Error("Verification failed");
     } catch (err) {
-        console.log(err);
+        console.log("Read all blocks on system ");
+        console.log("Number of blocks: " + blocks);
         break;
     }
     ++blocks;
@@ -450,15 +454,20 @@ async function getNewBlock (url) {
             responseType: 'arraybuffer'
         }).then (res => {
             let block = res.data;
-            block = Buffer.from(block)
-            fs.writeFileSync(`Blocks/${blocks}.dat`,block);
-            processBlock(block);
+            block = Buffer.from(block);
+            if(verifyBlock(block, cloneDeep(unusedOutputs)) === true)
+            {
+                fs.writeFileSync(`Blocks/${blocks}.dat`,block);
+                processBlock(block);
+            }
+            else
+                return new Error("Verification failed :(, block not added");
         });
 }
 
 async function getNewPeers(url)
 {
-    axios.post(url + '/newPeer', {
+    await axios.post(url + '/newPeer', {
     url : me
     }).then( res => {
         if(res.status === 200)
@@ -466,15 +475,15 @@ async function getNewPeers(url)
             myPeers.push(url);
             console.log(url + " Added as peer");
         }
-    }).catch( err => {
-        axios.get (url + '/getPeers').then(res => {
+    }).catch( async (err) => {
+        await axios.get (url + '/getPeers').then(res => {
             let peers = res.data.peers;
             console.log(peers);
             if(myPeers.length <= peerLim/2)
                 for(let peer of peers)
                 {
                     if(myPeers.indexOf(peer) === -1)
-                        getNewPeers(peer);
+                        knownNodes.push(peer);
                 }
         }).catch(err => {
             console.log("Invalid URL");
@@ -510,7 +519,8 @@ async function getData()
             }
             catch(err)
             {
-                console.log("recd All blocks");
+                console.log(err);
+                console.log("recd all verified blocks");
                 break;
             }
         }
@@ -523,13 +533,15 @@ async function getData()
 // Function to initialize node
 async function init() 
 {
-    knownNodes.forEach((url) => {
+    await knownNodes.forEach(async (url) => {
         console.log(url);
         if (myPeers.length <= peerLim/2)
-            getNewPeers(url);
+            await getNewPeers(url);
     });
 
-    await getData();
+    setTimeout(async() =>  {
+        await getData();
+    }, 2000);
 
     setTimeout(() => {
         console.log(pendingTxns.length);
@@ -543,9 +555,10 @@ async function init()
 function mine()
 {
     let size = 116;
-    let fees = 0;
-    let header = Buffer.alloc(116);
-    let tempOutputs = new Map(unusedOutputs);
+    let fees = 0n;
+    let header = Buffer.alloc(100);
+    let tempOutputs = cloneDeep(unusedOutputs);
+    let numTxns = 1;
     for(let i = 0; i < pendingTxns.length; ++i)
     {
         let tx = transactionBuffer(pendingTxns[i]);
@@ -571,11 +584,25 @@ function mine()
             size += tx.length;
             if(size > 1000000)
                 break;
+            fs.appendFileSync("temp2.dat", pushInt(tx.length, 4, false), 'hex');
             fs.appendFileSync("temp2.dat", tx);
+            numTxns++;
         }
     }
-    let blockBod = fs.readFileSync('temp2.dat');
-    fs.unlinkSync('temp2.dat');
+    let blockBod = "";
+    try {
+        blockBod = fs.readFileSync('temp2.dat');
+        fs.unlinkSync('temp2.dat');
+    } catch(err)
+    {
+        if(blocks === 0)
+            console.log("No Block body, i.e genesis block ");
+        else
+        {
+            console.log("Can't have 2 genesis blocks");
+            return;
+        }
+    }
 
     let coinBaseTxn = new Transaction;
     coinBaseTxn.numInputs = 0;
@@ -588,37 +615,50 @@ function mine()
 
     coinBaseTxn.pushOutputs(coinBaseOut);
     let cbt = transactionBuffer(coinBaseTxn);
-
-    fs.writeFileSync('temp2.dat', cbt);
+    console.log("num txn while mining: " + numTxns);
+    fs.writeFileSync('temp2.dat', pushInt(numTxns, 4, false), 'hex');
+    fs.appendFileSync("temp2.dat", pushInt(cbt.length, 4, false), 'hex');
+    fs.appendFileSync('temp2.dat', cbt);
     fs.appendFileSync('temp2.dat', blockBod);
     blockBod = fs.readFileSync('temp2.dat');
     fs.unlinkSync('temp2.dat');
 
     let bHash = crypto.createHash('sha256').update(blockBod).digest('hex');
-    prevBlock = fs.readFileSync("Blocks/" + blocks + ".dat");
-    header.write(pushInt(blocks, 4, false), 0, 4);
-    header.write(crypto.createHash('sha256').update(prevBlock).digest('hex'),4,32, 'hex');
+    let prevBlock = "";
+    try{
+        prevBlock = fs.readFileSync("Blocks/" + (blocks - 1).toString() + ".dat");
+        header.write(crypto.createHash('sha256').update(prevBlock).digest('hex'),4,32, 'hex');
+    } catch (err) {
+        console.log("No previous block ");
+        header.write('0'.repeat(64),4,32, 'hex');
+    }
+    console.log(blocks);
+    header.write(pushInt(blocks, 4, false), 0, 4, 'hex');
     header.write(bHash, 36,32, 'hex');
     header.write(target, 68, 32, 'hex');
-
+    header = header.toString('hex');
+    console.log(header);
     worker.postMessage({header : header, 
                         target : target});
     worker.on('message', msg => {
-        fs.writeFileSync('temp3.dat', msg.header);
+        console.log(msg.header);
+        fs.writeFileSync('temp3.dat', msg.header, 'hex');
         
         fs.appendFileSync('temp3.dat', blockBod);
         let block = fs.readFileSync('temp3.dat');
         fs.unlinkSync('temp3.dat');
-        ++blocks;
-        processBlock(block);
-        postNewBlock(block);
-        mine();
+        if(verifyBlock(block, cloneDeep(unusedOutputs)) === true)
+        {
+            processBlock(block);
+            postNewBlock(block);
+            ++blocks;
+        }
     });
 }
 
 function postNewBlock(block)
 {
-    fs.writeFileSync(`Blocks/${blocks}.dat`,data);
+    fs.writeFileSync(`Blocks/${blocks}.dat`,block);
     console.log('Spreading the block');
     for(let peer of myPeers)
     {
@@ -790,7 +830,6 @@ app.post('/newBlock', (req, res) => {
         console.log(`Block ${blocks} mined.`);
         ++blocks;
         processBlock(data);
-        mine();
         postNewBlock(data);
         res.send("Block Added");
     }

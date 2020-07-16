@@ -29,7 +29,8 @@ function pushInt(num, size = 4, file = true)
 }
 
 parentPort.on('message', msg => {
-    let mainBuf = msg.header;
+    let mainBuf = Buffer.alloc(116)
+    mainBuf.write(msg.header, 0, 100, 'hex');
     let tHash = msg.target;
     let hash;
     for(let i = 0n; ; i += 1n)
@@ -41,6 +42,7 @@ parentPort.on('message', msg => {
         
         if(hash < tHash)
         {
+            let header = mainBuf.toString('hex');
             parentPort.postMessage({header : header});
             break;
         }

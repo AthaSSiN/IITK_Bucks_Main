@@ -69,9 +69,9 @@ function keygen()
                 else
             {
                 console.log("Key pair generated successfully");
-                fs.writeFileSync("pubKey.pem", pubKey);
-                fs.writeFileSync("privKey.pem", privKey);
-                console.log("contents written to ./pubKey.pem and ./privKey.pem");
+                fs.writeFileSync("public.pem", pubKey);
+                fs.writeFileSync("private.pem", privKey);
+                console.log("contents written to ./public.pem and ./private.pem");
             }
         });
 }
@@ -88,10 +88,10 @@ function viewBal()
             let unusedOutputs = res.data.unusedOutputs;
             let bal = 0n;
             for (let i = 0; i < unusedOutputs.length; i++)
-                bal += unusedOutputs[i].amount;
+                bal += BigInt(unusedOutputs[i].amount);
             console.log("Your balance is: " + bal + " coins");
         }).catch(err => {
-            console.log(err);
+            console.log(err.response.data);
         });
     }
     else if(ans === '1')
@@ -103,7 +103,7 @@ function viewBal()
             let unusedOutputs = res.data.unusedOutputs;
             let bal = 0n;
             for (let i = 0; i < unusedOutputs.length; i++)
-                bal += unusedOutputs[i].amount;
+                bal += BigInt(unusedOutputs[i].amount);
             console.log("Your balance is: " + bal + " coins");
         }).catch(err => {
             console.log(err.response.data);
@@ -122,13 +122,13 @@ async function doTxn()
     }).then(res => {
         unusedOutputs = res.data.unusedOutputs;
         for (let i = 0; i < unusedOutputs.length; i++)
-            bal += unusedOutputs[i].amount;
+            bal += BigInt(unusedOutputs[i].amount);
         console.log("Your balance is: " + bal + " coins");
     }).catch(err => {
         console.log(err.response.data);
     });
 
-    let numOutputs = rl.question("Enter number of outputs: ");
+    let numOutputs = rl.questionInt("Enter number of outputs: ");
     let outputs = [];
     let total = 0n;
 
@@ -178,7 +178,8 @@ async function doTxn()
     {
         mainBuf.write(unusedOutputs[i]["transactionId"], 0, 32, 'hex');
         mainBuf.write(pushInt(unusedOutputs[i]["index"],4,false), 32, 4, 'hex');
-        const sign = crypto.createSign('RSA-SHA256');
+        console.log(mainBuf.toString('hex'));
+        const sign = crypto.createSign('SHA256');
         sign.update(mainBuf);
         let signature = sign.sign({key:privKey, padding:crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength:32}, 'hex');
         let input = new Map();
@@ -211,11 +212,14 @@ function pushInt(num, size = 4, file = true)
             num = num >> 8;
         }
     else
+    {
+        num = BigInt(num);
         for(let i = 0; i < size; ++i)
         {
             arr[size-i-1] = parseInt(num%256n);
             num = num/256n;
         }
+    }
     if (file === true)
     {
         fs.appendFileSync("tempcli.dat", arr);
