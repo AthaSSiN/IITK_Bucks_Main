@@ -703,7 +703,7 @@ app.get ('/getPendingTransactions', (req, res) => {
         for(let output of outputs)
         {
             let vals = {};
-            vals["amount"] = output.coins;
+            vals["amount"] = output.coins.toString();
             vals["recipient"] = output.pubKey;
 
             out.push(vals);
