@@ -69,9 +69,9 @@ function keygen()
                 else
             {
                 console.log("Key pair generated successfully");
-                fs.writeFileSync("public.pem", pubKey);
-                fs.writeFileSync("private.pem", privKey);
-                console.log("contents written to ./public.pem and ./private.pem");
+                fs.writeFileSync("pubKey.pem", pubKey);
+                fs.writeFileSync("privKey.pem", privKey);
+                console.log("contents written to ./pubKey.pem and ./privKey.pem");
             }
         });
 }
