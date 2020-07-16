@@ -9,7 +9,7 @@ node app.js
 ```
 
 To connect to the Blockchain:
-1. run `ngrok 8000` to get the server online, and add the generated url to "me" in config.json  
+1. run `ngrok http 8000` to get the server online, and add the generated url to "me" in config.json  
 2. config the config.json file according to your system, and run app.js. 
 
 The node will automatically connect to other nodes, and get the existing blocks, which will be stored in the 'Blocks' directory.
