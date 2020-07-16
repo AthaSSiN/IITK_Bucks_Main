@@ -191,7 +191,6 @@ function readTxn(str)
 function verifyTxn(txn, realUnusedOutputs)
 { 
     let tempOutputs = cloneDeep(realUnusedOutputs);
-    console.log(tempOutputs);
     let inputs = txn.getInputs();
     let spent = 0n, ini = 0n;
 
@@ -222,7 +221,6 @@ function verifyTxn(txn, realUnusedOutputs)
         }
 
         tempOutputs.delete(val);
-        console.log("ins");
         ini += prevOut.coins;
     }
 
@@ -236,7 +234,6 @@ function verifyTxn(txn, realUnusedOutputs)
         }
         spent += output.coins;
     }
-
     return spent < ini;
 
 }
@@ -245,49 +242,49 @@ function verifyBlock(block, unusedOutputs)
 {
     let index = readInt(block, 0, 4);
     console.log(index);
-    if(index !== 0)
+    
+    let start = 116;
+    let numTxns = readInt(block, start, start+4);
+
+    start += 4;
+    let cbt;
+    let fees = 0n;
+    for(let i = 0; i < numTxns; ++i)
     {
-        let start = 116;
-        let numTxns = readInt(block, start, start+4);
+        let size = readInt(block, start, start + 4);
         start += 4;
-        let cbt;
-        let fees = 0n;
-        for(let i = 0; i < numTxns; ++i)
+        
+        let tx = block.subarray(start, start + size);
+        start+=size;
+        let txn = readTxn(tx);
+        if(i === 0)
+            cbt = txn;
+        
+        else if( verifyTxn(txn, unusedOutputs) === false)
         {
-            let size = readInt(block, start, start + 4);
-            start += 4;
-            
-            let tx = block.subarray(start, start + size);
-            start+=size;
-            let txn = readTxn(tx)
-            if(i === 0)
-                cbt = txn;
-            
-            else if( verifyTxn(txn, unusedOutputs) === false)
+            console.log("wrong txn");
+            return false;
+        }
+        else
+        {
+            let inputs = txn.getInputs();
+            for (let input of inputs)
             {
-                console.log("wrong txn");
-                return false;
+                let val = [input.txnId, input.index];
+                fees += unusedOutputs[val].coins;
+                unusedOutputs.delete(val);
             }
-            else
+            let outputs = txn.getOutputs();
+            for(let output of outputs)
             {
-                let inputs = txn.getInputs();
-                for (let input of inputs)
-                {
-                    let val = [input.txnId, input.index];
-                    fees += unusedOutputs[val].coins;
-                    unusedOutputs.delete(val);
-                }
-                let outputs = txn.getOutputs();
-                for(let output of outputs)
-                {
-                    fees -= output.coins;
-                }
+                fees -= output.coins;
             }
         }
-        let cbtOutputs = cbt.getOutputs();
-        if (cbtOutputs.coins > fees + blockReward)
-            return false;
     }
+    let cbtOutputs = cbt.getOutputs();
+    if (cbtOutputs[0].coins > fees + blockReward)
+        return false;
+
 
     let header = block.subarray(0, 116);
     let pHash = block.toString('hex', 4, 36);
@@ -297,20 +294,33 @@ function verifyBlock(block, unusedOutputs)
     if(bHash !== crypto.createHash('sha256').update(block.subarray(116)).digest('hex'))
         return false;
     
-    if(index !== 0)
+    if(blocks !== 0)
     {
-        prevBlock = fs.readFileSync("Blocks/" + (index - 1).toString() + ".dat");
-        if(pHash !== crypto.createHash('sha256').update(prevBlock).digest('hex'))
+        console.log("Reading " + "Blocks/" + (blocks - 1).toString() + ".dat");
+        prevBlock = fs.readFileSync("Blocks/" + (blocks - 1).toString() + ".dat");
+        if(pHash !== crypto.createHash('sha256').update(prevBlock.subarray(0,116)).digest('hex'))
+        {
+            console.log("Wrong parent hash");
+            console.log(pHash);
+            console.log(crypto.createHash('sha256').update(prevBlock.subarray(0,116)).digest('hex'));
             return false;
+        }
     }
     else
     {
         if(pHash !== '0'.repeat(64))
+        {
+            console.log("Wrong parent hash");
+            console.log(pHash);
             return false;
+        }
     }
 
     if(crypto.createHash('sha256').update(header).digest('hex') >= targ)
+    {
+        console.log("Wrong nonce");
         return false;
+    }
     
     return true;
 }
@@ -425,8 +435,6 @@ function processBlock(block)
                 userOutputs[outputs[i].pubKey].push(obj);
             }
         }
-        console.log(unusedOutputs);
-        console.log(pendingTxns);
     }
 }
 
@@ -436,6 +444,7 @@ while(1)
     try {
         block = fs.readFileSync(`Blocks/${blocks}.dat`);
         ret = verifyBlock(block, cloneDeep(unusedOutputs));
+        console.log(ret);
         if (ret === true)
             processBlock(block);
         else
@@ -452,16 +461,17 @@ while(1)
 async function getNewBlock (url) {
     await axios.get (url + "/getBlock/" + blocks, {
             responseType: 'arraybuffer'
-        }).then (res => {
+        }).then (async (res) => {
             let block = res.data;
             block = Buffer.from(block);
             if(verifyBlock(block, cloneDeep(unusedOutputs)) === true)
             {
                 fs.writeFileSync(`Blocks/${blocks}.dat`,block);
+                console.log("Block saved to " + `Blocks/${blocks}.dat`);
                 processBlock(block);
             }
             else
-                return new Error("Verification failed :(, block not added");
+                throw new Error("Verification failed :(, block not added");
         });
 }
 
@@ -515,11 +525,9 @@ async function getData()
             try{
                 await getNewBlock(peer);
                 ++blocks;
-                console.log(blocks);
             }
             catch(err)
             {
-                console.log(err);
                 console.log("recd all verified blocks");
                 break;
             }
@@ -627,7 +635,7 @@ function mine()
     let prevBlock = "";
     try{
         prevBlock = fs.readFileSync("Blocks/" + (blocks - 1).toString() + ".dat");
-        header.write(crypto.createHash('sha256').update(prevBlock).digest('hex'),4,32, 'hex');
+        header.write(crypto.createHash('sha256').update(prevBlock.subarray(0,116)).digest('hex'),4,32, 'hex');
     } catch (err) {
         console.log("No previous block ");
         header.write('0'.repeat(64),4,32, 'hex');
@@ -663,8 +671,10 @@ function postNewBlock(block)
     for(let peer of myPeers)
     {
         axios.post(peer +'/newBlock', {
-            headers : {'Content-Type' : 'application/octet-stream'},
-            data : block
+            block,
+        }, 
+        {
+            headers : {'Content-Type' : 'application/octet-stream'}
         }).then(res => {
             console.log('Block sent to '+ peer);
         }).catch(err => {
@@ -836,7 +846,7 @@ app.post('/newBlock', (req, res) => {
     else
     {
         console.log("Invalid block");
-        res.send("Invalid block");
+        res.status(400).send("Invalid block");
     }
 });
 

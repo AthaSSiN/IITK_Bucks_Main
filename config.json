@@ -1,6 +1,6 @@
 {
-    "me" : "http://99469f6276b9.ngrok.io",
+    "me" : "  http://b3afb3dbb42b.ngrok.io",
     "knownNodes" : ["https://iitkbucks.pclub.in","http://localhost:7000", "asd"],
-    "blockReward" : "10000000",
+    "blockReward" : "101000",
     "target" : "00000f0000000000000000000000000000000000000000000000000000000000"
 }
