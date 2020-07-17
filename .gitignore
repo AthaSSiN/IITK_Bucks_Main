@@ -4,4 +4,4 @@ test*.js
 */try
 private.pem
 privKey.pem
-Blocks*
+Blocks/*.dat
