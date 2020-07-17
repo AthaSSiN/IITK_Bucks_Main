@@ -1,6 +1,6 @@
 # IITK_Bucks_Main
 
-This is the repo for main app for the IITK Bucks, a blockchain development Project by Programming Club IIT Kanpur
+This is the repo for main app for the IITK Bucks, a blockchain development Project by Programming Club IIT Kanpur under the SnT council.
 
 To use this repo run:
 ```bash
@@ -10,7 +10,7 @@ node app.js
 
 To connect to the Blockchain:
 1. run `ngrok http 8000` to get the server online, and add the generated url to "me" in config.json  
-2. config the config.json file according to your system, and run app.js. 
+2. config the config.json file according to your system, (remember to change your public key path) and run app.js. 
 
 The node will automatically connect to other nodes, and get the existing blocks, which will be stored in the 'Blocks' directory.
 
@@ -27,3 +27,5 @@ Never share your private key!
 The block reward and target are both set to be very high in config.json, and need to be reduced before entering the actual blockchain of IITK Bucks!
 
 The classes used in the program are available in the 'classes' directory. It also has a Block class, which I haven't used as such but exists for future use, etc.
+
+The various utility functions used are in the 'utils' directory.

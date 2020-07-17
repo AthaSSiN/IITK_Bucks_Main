@@ -191,8 +191,8 @@ async function doTxn()
     }
 
     axios.post(me + '/newTransaction', {
-        "inputs" : inputs,
-        "outputs": outputs
+        inputs : inputs,
+        outputs : outputs
     }).then(res => {
         console.log("Txn sent!");
     }).catch(err => {

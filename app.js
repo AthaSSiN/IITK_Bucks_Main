@@ -2,14 +2,27 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
 const fs = require('fs');
-const Block = require("./classes/Block");
 const Transaction = require("./classes/Transaction");
 const Output = require("./classes/Output");
-const Input = require("./classes/Input");
 const getRawBody = require('raw-body');
 const axios = require('axios');
-const {Worker} = require('worker_threads');
-const {cloneDeep} = require('lodash');
+const { Worker } = require('worker_threads');
+const { cloneDeep } = require('lodash');
+const { deepStrictEqual } = require('assert');
+const {
+    pushInt,
+    readInt
+} = require('./utils/basicUtils');
+const {
+    verifyTxn,
+    verifyBlock
+} = require('./utils/verificationUtils');
+const {
+    readTxn,
+    transactionBuffer,
+    buildPendingTxns
+} = require('./utils/txnUtils');
+
 let worker = new Worker('./mine.js');
 
 const app = express();
@@ -43,8 +56,8 @@ const env = JSON.parse(fs.readFileSync('./config.json'));
 const me = env["me"];
 let knownNodes = env["knownNodes"];
 let blockReward = BigInt(env["blockReward"]);
-let myKey = fs.readFileSync('./public.pem');
-let target = env["target"];
+const myKey = fs.readFileSync(env["pubKeyPath"]);
+const target = env["target"];
 
 // Global Variables
 
@@ -56,338 +69,9 @@ let pendingTxns = [];
 let unusedOutputs = new Map();
 let keys = new Map();
 let userOutputs = new Map();
-
-/******* BASIC UTILS *********/
-
-function getOutputsHash(txn)
-{
-    pushInt(txn.numOutputs);
-    outputs = txn.getOutputs();
-    for(let output of outputs)
-    {
-        pushInt(output.coins, 8);
-        pushInt(output.pubKeyLen);
-        pushText(output.pubKey);
-    }
-
-    let buf = fs.readFileSync("temp.dat");
-    let hash = crypto.createHash('sha256').update(buf).digest('hex');
-
-    fs.unlinkSync("temp.dat");
-    return hash;
-
-}
-
-function pushInt(num, size = 4, file = true)
-{
-    let arr = new Uint8Array(size);
-    if(size === 4)
-        for(let i = 0; i < size; ++i)
-        {
-            arr[size-i-1] = num%256;
-            num = num >> 8;
-        }
-    else
-    {
-        num = BigInt(num);
-        for(let i = 0; i < size; ++i)
-        {
-            arr[size-i-1] = parseInt(num%256n);
-            num = num/256n;
-        }
-    }
-    if (file === true)
-    {
-        fs.appendFileSync("temp.dat", arr);
-        return;
-    }
-    else
-    {
-        return Buffer.from(arr).toString('hex');
-    }
-}
-
-function pushText(txt)
-{
-    let arr = new Uint8Array(Buffer.from(txt, 'utf-8'));
-    fs.appendFileSync("temp.dat", arr);
-    return;
-}
-
-function pushHash(str)
-{
-    let arr = new Uint8Array(Buffer.from(str, 'hex'));
-    fs.appendFileSync("temp.dat", arr);
-    return;
-}
-
-function readInt(str, start, end)
-{
-    let size = end - start;
-    if(size === 4)
-    {
-        let ans = 0;
-        for(let i = 0; i < size; ++i)
-        {
-            ans = ans << 8;
-            ans += str[i + start];
-        }
-        return ans;
-    }
-
-    else
-    {
-        let ans = 0n;
-        for (let i = 0; i < size; ++i)
-        {
-            ans = ans * 256n;
-            ans += BigInt(str[i+start])
-        }
-        return ans;
-    }
-}
+let curBlock = undefined;
 
 /*****  BLOCK UTILS ***** */
-
-
-function readTxn(str)
-{
-    let start = 0;
-    let txn = new Transaction;
-    txn.numInputs = readInt(str, start, start + 4);
-    start += 4;
-    for (let i = 0; i < txn.numInputs; ++i)
-    {
-        let input = new Input;
-        input.txnId = str.toString("hex", start, start + 32);
-        start += 32;
-        input.index = readInt(str, start, start + 4);
-        start += 4;
-        input.sigLength = readInt(str, start, start + 4);
-        start += 4;
-        input.sig = str.toString("hex", start, start + input.sigLength);
-        start += input.sigLength;
-        txn.pushInputs(input);
-    }
-
-    txn.numOutputs = readInt(str, start, start + 4);
-    start += 4;
-    
-    for (let i = 0; i < txn.numOutputs; ++i)
-    {
-        let output = new Output;
-        output.coins = readInt(str, start, start + 8);
-        start += 8;
-        output.pubKeyLen = readInt(str, start, start + 4);
-        start += 4;
-        output.pubKey = str.toString("utf-8", start, start + output.pubKeyLen);
-        start += output.pubKeyLen;
-        txn.pushOutputs(output);
-    }
-
-    return txn;
-}
-
-function verifyTxn(txn, realUnusedOutputs)
-{ 
-    let tempOutputs = cloneDeep(realUnusedOutputs);
-    let inputs = txn.getInputs();
-    let spent = 0n, ini = 0n;
-
-    let mainBuf = Buffer.alloc(68);
-    mainBuf.write(getOutputsHash(txn), 36, 32, 'hex');
-    for (let input of inputs)
-    {
-        let prevOut;
-        let val = [input.txnId, input.index];
-        if(val in tempOutputs)
-        {
-            prevOut = tempOutputs[val];
-        }
-        else
-        {
-            console.log("Provided input not in unused outputs");
-            return false;
-        }
-        
-        mainBuf.write(input.txnId, 0, 32, 'hex');
-        mainBuf.write(pushInt(input.index,4,false), 32, 4, 'hex');
-        
-        const verify = crypto.createVerify('SHA256').update(mainBuf).verify({key:prevOut.pubKey, padding:crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength:32}, Buffer.from(input.sig, 'hex'));
-        if(verify === false)
-        {
-            console.log("Incorrect signature");
-            return false;
-        }
-
-        tempOutputs.delete(val);
-        ini += prevOut.coins;
-    }
-
-    let outputs = txn.getOutputs();
-    for (let output of outputs)
-    {
-        if(output.coins < 0)
-        {
-            console.log("no");
-            return false;
-        }
-        spent += output.coins;
-    }
-    return spent < ini;
-
-}
-
-function verifyBlock(block, unusedOutputs)
-{
-    let index = readInt(block, 0, 4);
-    console.log(index);
-    
-    let start = 116;
-    let numTxns = readInt(block, start, start+4);
-
-    start += 4;
-    let cbt;
-    let fees = 0n;
-    for(let i = 0; i < numTxns; ++i)
-    {
-        let size = readInt(block, start, start + 4);
-        start += 4;
-        
-        let tx = block.subarray(start, start + size);
-        start+=size;
-        let txn = readTxn(tx);
-        if(i === 0)
-            cbt = txn;
-        
-        else if( verifyTxn(txn, unusedOutputs) === false)
-        {
-            console.log("wrong txn");
-            return false;
-        }
-        else
-        {
-            let inputs = txn.getInputs();
-            for (let input of inputs)
-            {
-                let val = [input.txnId, input.index];
-                fees += unusedOutputs[val].coins;
-                unusedOutputs.delete(val);
-            }
-            let outputs = txn.getOutputs();
-            for(let output of outputs)
-            {
-                fees -= output.coins;
-            }
-        }
-    }
-    let cbtOutputs = cbt.getOutputs();
-    if (cbtOutputs[0].coins > fees + blockReward)
-        return false;
-
-
-    let header = block.subarray(0, 116);
-    let pHash = block.toString('hex', 4, 36);
-    let bHash = block.toString('hex', 36, 68);
-    let targ = block.toString('hex', 68, 100);
-
-    if(bHash !== crypto.createHash('sha256').update(block.subarray(116)).digest('hex'))
-        return false;
-    
-    if(blocks !== 0)
-    {
-        console.log("Reading " + "Blocks/" + (blocks - 1).toString() + ".dat");
-        prevBlock = fs.readFileSync("Blocks/" + (blocks - 1).toString() + ".dat");
-        if(pHash !== crypto.createHash('sha256').update(prevBlock.subarray(0,116)).digest('hex'))
-        {
-            console.log("Wrong parent hash");
-            console.log(pHash);
-            console.log(crypto.createHash('sha256').update(prevBlock.subarray(0,116)).digest('hex'));
-            return false;
-        }
-    }
-    else
-    {
-        if(pHash !== '0'.repeat(64))
-        {
-            console.log("Wrong parent hash");
-            console.log(pHash);
-            return false;
-        }
-    }
-
-    if(crypto.createHash('sha256').update(header).digest('hex') >= targ)
-    {
-        console.log("Wrong nonce");
-        return false;
-    }
-    
-    return true;
-}
-
-function transactionBuffer(txn)
-{
-    let inputs = txn.getInputs();
-    let outputs = txn.getOutputs();
-
-    pushInt(txn.numInputs);
-    
-    for(let input of inputs)
-    {
-        pushHash(input.txnId);
-        pushInt(input.index);
-        pushInt(input.sigLength)
-        pushHash(input.sig);
-    }
-
-    pushInt(txn.numOutputs);
-
-    for(let output of outputs)
-    {
-        pushInt(output.coins, 8);
-        pushInt(output.pubKeyLen);
-        pushText(output.pubKey);
-    }
-
-    let tx = fs.readFileSync('temp.dat');
-    fs.unlinkSync('temp.dat');
-    return tx;
-}
-
-
-/***** UTILITITY FUNCTIONS **** */
-
-function buildPendingTxns(temp)
-{
-    let txn = new Transaction;
-    txn.numInputs = temp["inputs"].length;
-    for (let inp of temp["inputs"])
-    {
-        let input = new Input;
-        input.txnId = inp["transactionId"];
-        input.index = inp["index"];
-        input.sigLength = inp["signature"].length/2;
-        input.sig = inp["signature"];
-
-        txn.pushInputs(input);
-    }
-
-    txn.numOutputs = temp["outputs"].length;
-    for (let out of temp["outputs"])
-    {
-        let output = new Output;
-        output.coins = BigInt(out["amount"]);
-        output.pubKeyLen = out["recipient"].length;
-        output.pubKey = out["recipient"];
-
-        txn.pushOutputs(output);
-    }
-    console.log(txn);
-    if(pendingTxns.indexOf(txn) === -1)
-        pendingTxns.push(txn);
-    else
-        console.log("Txn already in pending Txns");
-}
 
 function processBlock(block)
 {
@@ -402,9 +86,20 @@ function processBlock(block)
         let txn = readTxn(tx);
         let txnId = crypto.createHash('sha256').update(tx).digest('hex');
         start += size;
-        let ind = pendingTxns.indexOf(txn);
+        let ind = pendingTxns.findIndex(x => {
+            try {
+                deepStrictEqual(x,txn);
+                return true;
+            } catch (err)
+            {
+                return false;
+            }
+        });
         if (ind > -1)
+        {
             pendingTxns.splice(ind, 1);
+            console.log("A txn removed from pending txns");
+        }
         let inputs = txn.getInputs();
         for (let input of inputs)
         {
@@ -438,12 +133,13 @@ function processBlock(block)
     }
 }
 
-// process exisiting blockchain
+// process existing blockchain
+
 while(1)
 {
     try {
         block = fs.readFileSync(`Blocks/${blocks}.dat`);
-        ret = verifyBlock(block, cloneDeep(unusedOutputs));
+        ret = verifyBlock(block, cloneDeep(unusedOutputs), blocks, target, blockReward);
         console.log(ret);
         if (ret === true)
             processBlock(block);
@@ -464,7 +160,9 @@ async function getNewBlock (url) {
         }).then (async (res) => {
             let block = res.data;
             block = Buffer.from(block);
-            if(verifyBlock(block, cloneDeep(unusedOutputs)) === true)
+            let ret = verifyBlock(block, cloneDeep(unusedOutputs), blocks, target, blockReward);
+            console.log(ret);
+            if(ret === true)
             {
                 fs.writeFileSync(`Blocks/${blocks}.dat`,block);
                 console.log("Block saved to " + `Blocks/${blocks}.dat`);
@@ -502,14 +200,20 @@ async function getNewPeers(url)
 }
 
 
-function getPendingTxns(url)
+async function getPendingTxns(url)
 {
-    axios.get(url + '/getPendingTransactions').then(res => {
+    await axios.get(url + '/getPendingTransactions').then(res => {
         let txns = res.data;
-        for (let temp of txns)
-            buildPendingTxns(temp);
-        
-        console.log(pendingTxns);
+        if(txns.length > 0)
+        {
+            for (let temp of txns)
+            {
+                let txn = buildPendingTxns(temp, pendingTxns);
+                if(txn !== undefined)
+                    pendingTxns.push(txn);
+            }
+        }
+        console.log("Recd " + pendingTxns.length + " txns during init");
     })
 }
 
@@ -532,7 +236,7 @@ async function getData()
                 break;
             }
         }
-        getPendingTxns(peer);
+        await getPendingTxns(peer);
     }
     else
         console.log("No Peers! :(")
@@ -554,8 +258,12 @@ async function init()
     setTimeout(() => {
         console.log(pendingTxns.length);
         if(pendingTxns.length > 0)
+        {
+            console.log("Mining via init");
+            curBlock = blocks;
             mine();
-    }, 10000)
+        }
+    }, 5000);
 }
 
 //Block mining functions:
@@ -588,12 +296,13 @@ function mine()
             {
                 fees -= output.coins;
             }
-            let tx = transactionBuffer(pendingTxns[i]);
             size += tx.length;
             if(size > 1000000)
                 break;
             fs.appendFileSync("temp2.dat", pushInt(tx.length, 4, false), 'hex');
             fs.appendFileSync("temp2.dat", tx);
+            console.log(pendingTxns[i]);
+            console.log("to be mined");
             numTxns++;
         }
     }
@@ -623,7 +332,7 @@ function mine()
 
     coinBaseTxn.pushOutputs(coinBaseOut);
     let cbt = transactionBuffer(coinBaseTxn);
-    console.log("num txn while mining: " + numTxns);
+    console.log("num txn while mining: " + (numTxns-1).toString() + " + cbt");
     fs.writeFileSync('temp2.dat', pushInt(numTxns, 4, false), 'hex');
     fs.appendFileSync("temp2.dat", pushInt(cbt.length, 4, false), 'hex');
     fs.appendFileSync('temp2.dat', cbt);
@@ -655,7 +364,7 @@ function mine()
         fs.appendFileSync('temp3.dat', blockBod);
         let block = fs.readFileSync('temp3.dat');
         fs.unlinkSync('temp3.dat');
-        if(verifyBlock(block, cloneDeep(unusedOutputs)) === true)
+        if(verifyBlock(block, cloneDeep(unusedOutputs), blocks, target, blockReward) === true)
         {
             processBlock(block);
             postNewBlock(block);
@@ -670,15 +379,13 @@ function postNewBlock(block)
     console.log('Spreading the block');
     for(let peer of myPeers)
     {
-        axios.post(peer +'/newBlock', {
-            block,
-        }, 
+        axios.post(peer +'/newBlock', block, 
         {
             headers : {'Content-Type' : 'application/octet-stream'}
         }).then(res => {
             console.log('Block sent to '+ peer);
         }).catch(err => {
-            console.log(err);
+            console.log(err.response.data);
         })
     }
 }
@@ -720,6 +427,7 @@ app.get ('/getPendingTransactions', (req, res) => {
         }
 
         let temp = {};
+        temp["id"] = crypto.createHash('sha256').update(transactionBuffer(txn)).digest('hex');
         temp["inputs"] = inp;
         temp["outputs"] = out;
 
@@ -831,16 +539,17 @@ app.get('/getPeers', (req,res) => {
 
 app.post('/newBlock', (req, res) => {
     let data = req.body;
+    console.log(data);
     console.log("Verifying block");
     data = Buffer.from(data);
-    ret = verifyBlock(data, cloneDeep(unusedOutputs));
+    ret = verifyBlock(data, cloneDeep(unusedOutputs), blocks, target, blockReward);
     if(ret === true)
     {
         worker.terminate().then(console.log('worker terminated :-('));
         console.log(`Block ${blocks} mined.`);
-        ++blocks;
         processBlock(data);
         postNewBlock(data);
+        ++blocks;
         res.send("Block Added");
     }
     else
@@ -852,9 +561,28 @@ app.post('/newBlock', (req, res) => {
 
 app.post('/newTransaction', (req, res) => {
     let temp = req.body;
-    buildPendingTxns(temp);
-    mine();
-    res.send("Added to pending Txns");
+    console.log("Recd new txn");
+    let txn = buildPendingTxns(temp, pendingTxns);
+    if(txn !== undefined)
+    {
+        pendingTxns.push(txn);
+        let tx = transactionBuffer(txn);
+        let txnId = crypto.createHash('sha256').update(tx).digest('hex');
+        for(let peer of myPeers)
+        {
+            axios.post(peer + '/newTransaction', {
+                id : txnId,
+                inputs : temp.inputs,
+                outputs : temp.outputs
+            }).then(res => {
+                console.log("Sent to " + peer);
+            }).catch(err => {
+                console.log("Got an error ");
+                console.log(err.response.data);
+            })
+        }
+        res.send("Added to pending Txns");
+    }
 });
 
 app.listen (8000, () => {
@@ -862,4 +590,12 @@ app.listen (8000, () => {
 });
 
 init();
+setInterval(() => {
+    if(pendingTxns.length > 0 && curBlock !== blocks)
+    {
+        console.log("Mining via timeout");
+        curBlock = blocks;
+        mine();
+    }
+}, 10000);
 

@@ -1,6 +1,7 @@
 {
-    "me" : "  http://b3afb3dbb42b.ngrok.io",
-    "knownNodes" : ["https://iitkbucks.pclub.in","http://localhost:7000", "asd"],
-    "blockReward" : "101000",
-    "target" : "00000f0000000000000000000000000000000000000000000000000000000000"
+    "me" : "http://f443e7cb40cc.ngrok.io",
+    "knownNodes" : ["https://iitkbucks.pclub.in"],
+    "blockReward" : "100000",
+    "target" : "0000004000000000000000000000000000000000000000000000000000000000",
+    "pubKeyPath": "./public.pem"
 }
