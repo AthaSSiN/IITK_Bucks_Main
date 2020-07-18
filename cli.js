@@ -135,7 +135,7 @@ async function doTxn()
     for(let i = 0; i < numOutputs; ++i)
     {
         let ans = rl.question("Enter alias of recipient, or path to public Key of the recipient: ");
-        let output = new Map();
+        let output = {};
         try{
             output["recipient"] = fs.readFileSync(ans, 'utf-8');
         } catch (err) {
@@ -164,13 +164,17 @@ async function doTxn()
 
     let left = bal;
     left = BigInt(left.toString() - total.toString());
-    let output = new Map();
-    output["recipient"] = pubKey;
-    output["amount"] = left.toString();
-    outputs.push(output);
+    if(left > 0n)
+    {
+        let output = {};
+        output["recipient"] = pubKey;
+        output["amount"] = left.toString();
+        outputs.push(output);
+        numOutputs++;
+    }
 
     let mainBuf = Buffer.alloc(68);
-    let outHash = getOutputsHash(numOutputs + 1, outputs);
+    let outHash = getOutputsHash(numOutputs, outputs);
     mainBuf.write(outHash, 36,32,'hex');
 
     let inputs = [];
@@ -182,7 +186,7 @@ async function doTxn()
         const sign = crypto.createSign('SHA256');
         sign.update(mainBuf);
         let signature = sign.sign({key:privKey, padding:crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength:32}, 'hex');
-        let input = new Map();
+        let input = {};
         input["transactionId"] = unusedOutputs[i]["transactionId"];
         input["index"] = unusedOutputs[i]["index"];
         input["signature"] = signature;

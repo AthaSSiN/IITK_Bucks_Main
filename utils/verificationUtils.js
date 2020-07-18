@@ -41,7 +41,7 @@ function verifyTxn(txn, realUnusedOutputs)
             return false;
         }
 
-        tempOutputs.delete(val);
+        delete tempOutputs[val];
         ini += prevOut.coins;
     }
 
@@ -93,7 +93,7 @@ function verifyBlock(block, unusedOutputs, blocks, target, blockReward)
             {
                 let val = [input.txnId, input.index];
                 fees += unusedOutputs[val].coins;
-                unusedOutputs.delete(val);
+                delete unusedOutputs[val];
             }
             let outputs = txn.getOutputs();
             for(let output of outputs)

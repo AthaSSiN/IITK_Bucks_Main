@@ -66,7 +66,7 @@ let blocks = 0;
 const peerLim = 4;
 let myPeers = [];
 let pendingTxns = [];
-let unusedOutputs = new Map();
+let unusedOutputs = {};
 let keys = new Map();
 let userOutputs = new Map();
 let curBlock = undefined;
@@ -109,7 +109,7 @@ function processBlock(block)
             obj["index"] = input.index;
             obj["amount"] = unusedOutputs[val].coins.toString();
             userOutputs[unusedOutputs[val].pubKey].splice(userOutputs[unusedOutputs[val].pubKey].indexOf(obj), 1);
-            unusedOutputs.delete(val);
+            delete unusedOutputs[val];
         }
         let outputs = txn.getOutputs();
         let numOutputs = txn.numOutputs;
@@ -277,33 +277,36 @@ function mine()
     let numTxns = 1;
     for(let i = 0; i < pendingTxns.length; ++i)
     {
-        let tx = transactionBuffer(pendingTxns[i]);
-        size += tx.length
-        if(size > 1000116)
-            break;
-
         if(verifyTxn(pendingTxns[i], tempOutputs) === true)
         {
+            let tx = transactionBuffer(pendingTxns[i]);
+            size += tx.length;
+            if(size > 1000116)
+                break;
+
             let inputs = pendingTxns[i].getInputs();
             for (let input of inputs)
             {
                 let val = [input.txnId, input.index];
                 fees += tempOutputs[val].coins;
-                tempOutputs.delete(val);
+                delete tempOutputs[val];
             }
             let outputs = pendingTxns[i].getOutputs();
             for(let output of outputs)
             {
                 fees -= output.coins;
             }
-            size += tx.length;
-            if(size > 1000000)
-                break;
             fs.appendFileSync("temp2.dat", pushInt(tx.length, 4, false), 'hex');
             fs.appendFileSync("temp2.dat", tx);
             console.log(pendingTxns[i]);
             console.log("to be mined");
             numTxns++;
+        }
+        else
+        {
+            pendingTxns.splice(i,1);
+            console.log("A previously verified txn was removed as it was double spending");
+            i--;
         }
     }
     let blockBod = "";
@@ -519,8 +522,8 @@ app.post('/getUnusedOutputs', function(req, res) {
 app.post('/newPeer', (req, res) => {
 
     url = req.body.url;
-    if(myPeers.indexOf(url) != -1)
-        res.status(500).send("Peer Already Present");
+    if(myPeers.indexOf(url) !== -1)
+        res.send("Peer Already Present");
     else if(myPeers.length == peerLim)
         res.status(500).send("Peer Limit reached, send a request to /getPeers to have other potential peers");
     else
