@@ -116,7 +116,6 @@ function buildPendingTxns(temp, pendingTxns)
         return txn;
     else
     {
-        console.log("Txn already in pending Txns");
         return undefined;
     }
 }

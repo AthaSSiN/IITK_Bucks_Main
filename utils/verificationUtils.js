@@ -63,7 +63,10 @@ function verifyBlock(block, unusedOutputs, blocks, target, blockReward)
 {
     let index = readInt(block, 0, 4);
     console.log(index);
-    
+    if(index < blocks)
+    {
+        return undefined;
+    }
     let start = 116;
     let numTxns = readInt(block, start, start+4);
 

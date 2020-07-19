@@ -108,7 +108,16 @@ function processBlock(block)
             obj["transactionId"] = input.txnId;
             obj["index"] = input.index;
             obj["amount"] = unusedOutputs[val].coins.toString();
-            userOutputs[unusedOutputs[val].pubKey].splice(userOutputs[unusedOutputs[val].pubKey].indexOf(obj), 1);
+            let ind = userOutputs[unusedOutputs[val].pubKey].findIndex(x => {
+                try {
+                    deepStrictEqual(x,obj);
+                    return true;
+                } catch (err)
+                {
+                    return false;
+                }
+            });
+            userOutputs[unusedOutputs[val].pubKey].splice(ind, 1);
             delete unusedOutputs[val];
         }
         let outputs = txn.getOutputs();
@@ -177,25 +186,24 @@ async function getNewPeers(url)
 {
     await axios.post(url + '/newPeer', {
     url : me
-    }).then( res => {
-        if(res.status === 200)
+    }).then(res => {
+        if(res.status === 200 && myPeers.indexOf(url) === -1)
         {
             myPeers.push(url);
             console.log(url + " Added as peer");
         }
     }).catch( async (err) => {
-        await axios.get (url + '/getPeers').then(res => {
-            let peers = res.data.peers;
-            console.log(peers);
-            if(myPeers.length <= peerLim/2)
+        if(myPeers.length <= peerLim/2)
+            await axios.get (url + '/getPeers').then(res => {
+                let peers = res.data.peers;
                 for(let peer of peers)
                 {
                     if(myPeers.indexOf(peer) === -1)
                         knownNodes.push(peer);
                 }
-        }).catch(err => {
-            console.log("Invalid URL");
-        });
+            }).catch(err => {
+                console.log(url + " is an invalid URL");
+            });
     });
 }
 
@@ -214,6 +222,8 @@ async function getPendingTxns(url)
             }
         }
         console.log("Recd " + pendingTxns.length + " txns during init");
+    }).catch(err => {
+        console.log("An error occured on the sender's side");
     })
 }
 
@@ -245,11 +255,13 @@ async function getData()
 // Function to initialize node
 async function init() 
 {
-    await knownNodes.forEach(async (url) => {
-        console.log(url);
-        if (myPeers.length <= peerLim/2)
-            await getNewPeers(url);
-    });
+    for (let i = 0; i < knownNodes.length; ++i)
+    {
+        if(myPeers.length <= peerLim/2)
+        {
+            await getNewPeers(knownNodes[i]);
+        }
+    }
 
     setTimeout(async() =>  {
         await getData();
@@ -319,7 +331,8 @@ function mine()
             console.log("No Block body, i.e genesis block ");
         else
         {
-            console.log("Can't have 2 genesis blocks");
+            console.log("\n No transactions remaining to mine, returning ");
+            curBlock--;
             return;
         }
     }
@@ -380,15 +393,21 @@ function postNewBlock(block)
 {
     fs.writeFileSync(`Blocks/${blocks}.dat`,block);
     console.log('Spreading the block');
-    for(let peer of myPeers)
+    for(let i = 0; i < myPeers.length; ++i)
     {
-        axios.post(peer +'/newBlock', block, 
+        axios.post(myPeers[i] +'/newBlock', block, 
         {
             headers : {'Content-Type' : 'application/octet-stream'}
         }).then(res => {
-            console.log('Block sent to '+ peer);
+            console.log('Block sent to '+ myPeers[i]);
         }).catch(err => {
-            console.log(err.response.data);
+            axios.get (myPeers[i] + '/getPeers').then(res => {
+                console.log(err.response.data);
+            }).catch(err2 => {
+                console.log(myPeers[i] + " is dead, removed from Peers");
+                myPeers.splice(i, 1);
+                i--;
+            });
         })
     }
 }
@@ -448,17 +467,23 @@ app.post('/addAlias', (req, res) => {
     
     else 
     {
-        for(let peer of myPeers)
+        for(let i = 0; i < myPeers.length; ++i)
         {
-            axios.post(peer + '/addAlias', {
+            axios.post(myPeers[i] + '/addAlias', {
                 alias : alias,
                 publicKey : pubKey
             })
             .then(res => {
-                console.log("Alias: ", alias, "sent to url: ", peer);
+                console.log("Alias: ", alias, "sent to url: ", myPeers[i]);
             })
             .catch(err => {
-                console.log(err);
+                axios.get (myPeers[i] + '/getPeers').then(res => {
+                    console.log(err.response.data);
+                }).catch(err2 => {
+                    console.log(myPeers[i] + " is dead, removed from Peers");
+                    myPeers.splice(i, 1);
+                    i--;
+                });
             })
         }
         
@@ -542,46 +567,63 @@ app.get('/getPeers', (req,res) => {
 
 app.post('/newBlock', (req, res) => {
     let data = req.body;
-    console.log(data);
-    console.log("Verifying block");
-    data = Buffer.from(data);
-    ret = verifyBlock(data, cloneDeep(unusedOutputs), blocks, target, blockReward);
-    if(ret === true)
-    {
-        worker.terminate().then(console.log('worker terminated :-('));
-        console.log(`Block ${blocks} mined.`);
-        processBlock(data);
-        postNewBlock(data);
-        ++blocks;
-        res.send("Block Added");
+    try {
+        data = Buffer.from(data);
+        ret = verifyBlock(data, cloneDeep(unusedOutputs), blocks, target, blockReward);
+        if(ret === true)
+        {
+            console.log("Verifying a received block");
+            console.log(data);
+            worker.terminate().then(console.log('worker terminated :-('));
+            console.log(`\nBlock ${blocks} mined.`);
+            processBlock(data);
+            postNewBlock(data);
+            ++blocks;
+            res.send("Block Added");
+        }
+        else if(ret === false)
+        {
+            console.log("Verifying a received block");
+            console.log(data);
+            console.log("Invalid block");
+            res.status(400).send("Invalid block");
+        }
+        else
+        {
+            res.send("Block was already present");
+        }
+    } catch (err) {
+        console.log("Recd block in invalid format");
+        res.status(400).send("Wrong format ");
     }
-    else
-    {
-        console.log("Invalid block");
-        res.status(400).send("Invalid block");
-    }
+    
 });
 
 app.post('/newTransaction', (req, res) => {
-    let temp = req.body;
-    console.log("Recd new txn");
+    let temp = req.body
     let txn = buildPendingTxns(temp, pendingTxns);
     if(txn !== undefined)
     {
+        console.log("Recd new txn");
         pendingTxns.push(txn);
         let tx = transactionBuffer(txn);
         let txnId = crypto.createHash('sha256').update(tx).digest('hex');
-        for(let peer of myPeers)
+        for(let i = 0 ; i < myPeers.length; ++i)
         {
-            axios.post(peer + '/newTransaction', {
+            axios.post(myPeers[i] + '/newTransaction', {
                 id : txnId,
                 inputs : temp.inputs,
                 outputs : temp.outputs
             }).then(res => {
-                console.log("Sent to " + peer);
+                console.log("Sent to " + myPeers[i]);
             }).catch(err => {
-                console.log("Got an error ");
-                console.log(err.response.data);
+                axios.get (myPeers[i] + '/getPeers').then(res => {
+                    console.log(err.response.data);
+                }).catch(err2 => {
+                    console.log(myPeers[i] + " is dead, removed from Peers");
+                    myPeers.splice(i, 1);
+                    i--;
+                });
             })
         }
         res.send("Added to pending Txns");
