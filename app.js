@@ -370,7 +370,7 @@ function mine()
     header.write(bHash, 36,32, 'hex');
     header.write(target, 68, 32, 'hex');
     header = header.toString('hex');
-    console.log(header);
+    console.log(header + 'X'.repeat(16) + 'Y'.repeat(16));
     worker.postMessage({header : header, 
                         target : target});
     worker.on('message', msg => {
@@ -569,11 +569,10 @@ app.post('/newBlock', (req, res) => {
     let data = req.body;
     try {
         data = Buffer.from(data);
+        console.log("Verifying a received block");
         ret = verifyBlock(data, cloneDeep(unusedOutputs), blocks, target, blockReward);
         if(ret === true)
         {
-            console.log("Verifying a received block");
-            console.log(data);
             worker.terminate().then(console.log('worker terminated :-('));
             console.log(`\nBlock ${blocks} mined.`);
             processBlock(data);
@@ -583,13 +582,12 @@ app.post('/newBlock', (req, res) => {
         }
         else if(ret === false)
         {
-            console.log("Verifying a received block");
-            console.log(data);
             console.log("Invalid block");
             res.status(400).send("Invalid block");
         }
         else
         {
+            console.log("Block was already present");
             res.send("Block was already present");
         }
     } catch (err) {

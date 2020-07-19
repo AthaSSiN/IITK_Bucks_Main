@@ -120,7 +120,6 @@ function verifyBlock(block, unusedOutputs, blocks, target, blockReward)
     
     if(blocks !== 0)
     {
-        console.log("Reading " + "Blocks/" + (blocks - 1).toString() + ".dat");
         prevBlock = fs.readFileSync("Blocks/" + (blocks - 1).toString() + ".dat");
         if(pHash !== crypto.createHash('sha256').update(prevBlock.subarray(0,116)).digest('hex'))
         {
